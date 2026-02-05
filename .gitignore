@@ -1,0 +1,23 @@
+# Ignore models and large binaries
+models/
+models_backup/
+outputs/
+*.png
+*.jpg
+*.jpeg
+
+# Ignore benchmark results
+benchmark_results_*.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.env
+
+# IDE
+.vscode/
+.idea/
