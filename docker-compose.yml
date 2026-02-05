@@ -1,0 +1,57 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  api:
+    build: .
+    ports:
+      - "8009:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+    volumes:
+      - electra-models:/app/models
+      - electra-outputs:/app/outputs
+      - ${PWD}/reference:/app/reference
+    depends_on:
+      - redis
+    runtime: nvidia
+    # HACK : Réinstaller numpy avant de démarrer
+    command: >
+      sh -c "pip install numpy==1.26.4 --force-reinstall --quiet &&
+             uvicorn app.api:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=0
+      - CELERY_WORKER_POOL=prefork
+      - CELERY_WORKER_CONCURRENCY=1
+    volumes:
+      - electra-models:/app/models
+      - electra-outputs:/app/outputs
+      - ${PWD}/reference:/app/reference
+    runtime: nvidia
+    depends_on:
+      - redis
+    # Même hack pour le worker
+    command: >
+      sh -c "python3 -c 'import multiprocessing; multiprocessing.set_start_method(\"spawn\")' &&
+             celery -A app.worker worker -l info -Q celery -n worker1@%h --pool=solo"
+
+volumes:
+  redis_data:
+  electra-models:
+    external: true
+  electra-outputs:
+    external: true
