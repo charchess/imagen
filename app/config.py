@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -45,3 +46,18 @@ CATEGORY_SUBTYPES = {
     "pose": ["main", "variant"],
 }
 MAX_REFERENCE_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+
+# Logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+
+def setup_logging():
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
+
+
+setup_logging()

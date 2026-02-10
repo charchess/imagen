@@ -3,6 +3,7 @@ Pipeline de génération d'images SDXL avec support multi-modèles et LoRA
 """
 
 import gc
+import logging
 import torch
 from diffusers import StableDiffusionXLPipeline, AutoencoderKL
 from PIL import Image
@@ -15,6 +16,8 @@ from compel import Compel, ReturnedEmbeddingsType
 
 # Import tokens from config
 from app.config import HUGGINGFACE_TOKEN, CIVITAI_API_TOKEN
+
+logger = logging.getLogger(__name__)
 
 
 class FlexiblePipeline:
@@ -32,7 +35,7 @@ class FlexiblePipeline:
         if hasattr(self, '_initialized') and self._initialized:
             return
 
-        print("🚀 Initialisation du pipeline flexible...")
+        logger.info("Initialisation du pipeline flexible")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # État du pipeline
@@ -46,20 +49,20 @@ class FlexiblePipeline:
         self.load_model(DEFAULT_MODEL)
 
         self._initialized = True
-        print(f"✅ Pipeline prêt sur {self.device}")
+        logger.info("Pipeline pret sur %s", self.device)
 
     def load_model(self, model_id: str):
         """Charge un modèle base (avec lazy loading)"""
         if hasattr(self, 'current_model') and hasattr(self, 'pipe') and \
            self.current_model == model_id and self.pipe is not None:
-            print(f"ℹ️  Modèle {model_id} déjà chargé")
+            logger.debug("Modele %s deja charge", model_id)
             return  # Déjà chargé
 
-        print(f"🔄 Chargement du modèle: {model_id}")
+        logger.info("Chargement du modele: %s", model_id)
 
         # Clear previous model
         if hasattr(self, 'pipe') and self.pipe is not None:
-            print("🧹 Nettoyage du modèle précédent...")
+            logger.debug("Nettoyage du modele precedent")
             del self.pipe
             del self.compel
             torch.cuda.empty_cache()
@@ -71,18 +74,18 @@ class FlexiblePipeline:
             raise ValueError(f"Modèle {model_id} non trouvé dans la configuration")
 
         # Load pipeline
-        print(f"⬇️  Chargement de {model_config.full_name}...")
+        logger.info("Chargement de %s", model_config.full_name)
 
         # Check if it's a checkpoint (single file) or full pipeline
         if model_config.checkpoint_url:
             # Load from checkpoint .safetensors file
-            print(f"📦 Chargement depuis checkpoint: {model_config.path}/{model_config.checkpoint_url}")
+            logger.debug("Chargement depuis checkpoint: %s/%s", model_config.path, model_config.checkpoint_url)
 
             # Build full HuggingFace URL for the checkpoint
             from huggingface_hub import hf_hub_download
 
             # Download the checkpoint file
-            print(f"⬇️  Téléchargement du checkpoint depuis HuggingFace...")
+            logger.info("Telechargement du checkpoint depuis HuggingFace")
             checkpoint_path = hf_hub_download(
                 repo_id=model_config.path,
                 filename=model_config.checkpoint_url,
@@ -90,7 +93,7 @@ class FlexiblePipeline:
                 token=HUGGINGFACE_TOKEN if HUGGINGFACE_TOKEN else None
             )
 
-            print(f"✅ Checkpoint téléchargé: {checkpoint_path}")
+            logger.info("Checkpoint telecharge: %s", checkpoint_path)
 
             load_kwargs = {
                 "torch_dtype": torch.float16,
@@ -104,7 +107,7 @@ class FlexiblePipeline:
             )
         else:
             # Load from full diffusers pipeline
-            print(f"📦 Chargement depuis pipeline diffusers: {model_config.path}")
+            logger.debug("Chargement depuis pipeline diffusers: %s", model_config.path)
 
             load_kwargs = {
                 "torch_dtype": torch.float16,
@@ -116,7 +119,7 @@ class FlexiblePipeline:
             # Add HuggingFace token if available (for gated/private models)
             if HUGGINGFACE_TOKEN:
                 load_kwargs["token"] = HUGGINGFACE_TOKEN
-                print("🔑 Utilisation du token HuggingFace")
+                logger.debug("Utilisation du token HuggingFace")
 
             self.pipe = StableDiffusionXLPipeline.from_pretrained(
                 model_config.path,
@@ -125,7 +128,7 @@ class FlexiblePipeline:
 
         # Load custom VAE if specified
         if model_config.vae_path:
-            print(f"⬇️  Chargement VAE: {model_config.vae_path}")
+            logger.debug("Chargement VAE: %s", model_config.vae_path)
 
             # Build kwargs for VAE loading
             vae_kwargs = {
@@ -144,7 +147,7 @@ class FlexiblePipeline:
             self.pipe.vae = vae
 
         # Setup Compel
-        print("⚡ Configuration Compel...")
+        logger.debug("Configuration Compel")
         self.compel = Compel(
             tokenizer=[self.pipe.tokenizer, self.pipe.tokenizer_2],
             text_encoder=[self.pipe.text_encoder, self.pipe.text_encoder_2],
@@ -153,7 +156,7 @@ class FlexiblePipeline:
         )
 
         # GPU optimizations
-        print("⚙️  Activation des optimisations GPU...")
+        logger.debug("Activation des optimisations GPU")
         self.pipe.enable_model_cpu_offload()
         self.pipe.enable_vae_slicing()
         self.pipe.enable_vae_tiling()
@@ -161,14 +164,14 @@ class FlexiblePipeline:
         self.current_model = model_id
         self.loaded_loras = {}  # Reset LoRAs when changing model
         self.ip_adapter_loaded = False  # Reset IP-Adapter
-        print(f"✅ Modèle {model_id} prêt")
+        logger.info("Modele %s pret", model_id)
 
     def load_loras(self, lora_configs: List[Dict]):
         """Charge et fusionne plusieurs LoRAs"""
         if not lora_configs:
             # Unload all LoRAs
             if self.loaded_loras:
-                print("🧹 Déchargement des LoRAs...")
+                logger.debug("Dechargement des LoRAs")
                 self.pipe.unload_lora_weights()
                 self.loaded_loras = {}
             return
@@ -184,12 +187,12 @@ class FlexiblePipeline:
             # Get LoRA config
             lora_config = get_lora_config(lora_id)
             if not lora_config:
-                print(f"⚠️  LoRA {lora_id} non trouvé, ignoré")
+                logger.warning("LoRA %s non trouve, ignore", lora_id)
                 continue
 
             # Load LoRA if not already loaded
             if lora_id not in self.loaded_loras:
-                print(f"⬇️  Chargement LoRA: {lora_config.name} (weight={weight})")
+                logger.info("Chargement LoRA: %s (weight=%s)", lora_config.name, weight)
                 try:
                     # Build kwargs for load_lora_weights
                     lora_kwargs = {
@@ -207,7 +210,7 @@ class FlexiblePipeline:
                     )
                     self.loaded_loras[lora_id] = lora_config
                 except Exception as e:
-                    print(f"❌ Erreur chargement LoRA {lora_id}: {e}")
+                    logger.error("Erreur chargement LoRA %s", lora_id, exc_info=True)
                     continue
 
             adapter_names.append(lora_id)
@@ -216,9 +219,9 @@ class FlexiblePipeline:
         # Set active adapters with weights
         if adapter_names:
             self.pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
-            print(f"✅ LoRAs actifs: {', '.join(adapter_names)}")
+            logger.info("LoRAs actifs: %s", ", ".join(adapter_names))
         else:
-            print("⚠️  Aucun LoRA chargé")
+            logger.warning("Aucun LoRA charge")
 
     def enhance_prompt_with_trigger_words(self, prompt: str, lora_configs: List[Dict]) -> str:
         """Ajoute les trigger words des LoRAs au prompt si nécessaire"""
@@ -233,14 +236,14 @@ class FlexiblePipeline:
                         enhanced_prompt += f", {trigger}"
 
         if enhanced_prompt != prompt:
-            print(f"💡 Prompt enrichi avec trigger words")
+            logger.debug("Prompt enrichi avec trigger words")
 
         return enhanced_prompt
 
     def _ensure_ip_adapter_loaded(self):
         """Charge IP-Adapter Plus si pas deja charge"""
         if not self.ip_adapter_loaded:
-            print(f"⬇️  Chargement IP-Adapter ({IP_ADAPTER_WEIGHT})...")
+            logger.info("Chargement IP-Adapter (%s)", IP_ADAPTER_WEIGHT)
             self.pipe.load_ip_adapter(
                 IP_ADAPTER_MODEL,
                 subfolder=IP_ADAPTER_SUBFOLDER,
@@ -248,7 +251,7 @@ class FlexiblePipeline:
                 cache_dir=MODELS_DIR
             )
             self.ip_adapter_loaded = True
-            print("✅ IP-Adapter charge")
+            logger.info("IP-Adapter charge")
 
     def compute_embedding(self, image_path: str) -> torch.Tensor:
         """
@@ -304,7 +307,7 @@ class FlexiblePipeline:
             # Enhance prompt with trigger words
             enhanced_prompt = self.enhance_prompt_with_trigger_words(prompt, loras)
 
-            print(f"📝 Prompt ({len(enhanced_prompt)} chars)")
+            logger.debug("Prompt (%d chars)", len(enhanced_prompt))
 
             # Compel encoding
             conditioning, pooled = self.compel(enhanced_prompt)
@@ -331,7 +334,7 @@ class FlexiblePipeline:
                         ip_args = {"ip_adapter_image": raw_images[0]}
                     else:
                         ip_args = {"ip_adapter_image": raw_images}
-                    print(f"🎭 IP-Adapter: {len(raw_images)} reference(s) (strength={avg_strength:.2f})")
+                    logger.info("IP-Adapter: %d reference(s) (strength=%.2f)", len(raw_images), avg_strength)
 
             elif reference_image_path and Path(reference_image_path).exists() and ip_strength > 0:
                 # Legacy: single reference image
@@ -340,15 +343,15 @@ class FlexiblePipeline:
                 ref_image = Image.open(reference_image_path).convert("RGB")
                 self.pipe.set_ip_adapter_scale(ip_strength)
                 ip_args = {"ip_adapter_image": ref_image}
-                print(f"🎭 IP-Adapter legacy (strength={ip_strength})")
+                logger.info("IP-Adapter legacy (strength=%s)", ip_strength)
 
             # Generator with seed
             generator = None
             if seed is not None:
                 generator = torch.Generator(device=self.device).manual_seed(seed)
-                print(f"🎲 Seed: {seed}")
+                logger.debug("Seed: %s", seed)
 
-            print(f"🎨 Génération (steps={steps}, cfg={guidance_scale})...")
+            logger.info("Generation (steps=%d, cfg=%s)", steps, guidance_scale)
 
             # Generation
             image = self.pipe(
@@ -365,11 +368,11 @@ class FlexiblePipeline:
             ).images[0]
 
             torch.cuda.empty_cache()
-            print("✅ Génération terminée")
+            logger.info("Generation terminee")
             return image
 
         except Exception as e:
-            print(f"❌ Erreur: {e}")
+            logger.error("Generation failed", exc_info=True)
             torch.cuda.empty_cache()
             raise
 

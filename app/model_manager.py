@@ -2,11 +2,14 @@
 Gestionnaire de modèles et LoRAs avec support de téléchargement automatique
 """
 
+import logging
 import os
 import requests
 from pathlib import Path
 from typing import Optional, Dict, List
 from huggingface_hub import hf_hub_download, scan_cache_dir
+
+logger = logging.getLogger(__name__)
 
 from app.config import (
     MODELS_DIR, BASE_MODELS_DIR, LORAS_DIR,
@@ -52,7 +55,7 @@ class ModelManager:
 
             return False
         except Exception as e:
-            print(f"⚠️  Erreur vérification modèle {model_path}: {e}")
+            logger.warning("Erreur verification modele %s: %s", model_path, e)
             return False
 
     @staticmethod
@@ -99,7 +102,7 @@ class ModelManager:
             if CIVITAI_API_TOKEN:
                 headers["Authorization"] = f"Bearer {CIVITAI_API_TOKEN}"
 
-            print(f"📥 Récupération infos Civitai model {model_id}...")
+            logger.info("Recuperation infos Civitai model %d", model_id)
             response = requests.get(api_url, headers=headers)
             response.raise_for_status()
 
@@ -107,7 +110,7 @@ class ModelManager:
 
             # Récupérer la dernière version
             if not model_data.get("modelVersions"):
-                print("❌ Aucune version disponible")
+                logger.error("Aucune version disponible")
                 return None
 
             latest_version = model_data["modelVersions"][0]
@@ -123,7 +126,7 @@ class ModelManager:
                     break
 
             if not download_url:
-                print("❌ Aucun fichier téléchargeable trouvé")
+                logger.error("Aucun fichier telechargeable trouve")
                 return None
 
             # Préparer le téléchargement
@@ -131,8 +134,8 @@ class ModelManager:
             output_filename = filename or original_filename
             output_path = output_dir / output_filename
 
-            print(f"⬇️  Téléchargement depuis Civitai: {output_filename}")
-            print(f"    URL: {download_url}")
+            logger.info("Telechargement depuis Civitai: %s", output_filename)
+            logger.debug("URL: %s", download_url)
 
             # Télécharger avec barre de progression
             if CIVITAI_API_TOKEN:
@@ -143,6 +146,7 @@ class ModelManager:
 
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
+            next_milestone = 25
 
             with open(output_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -151,9 +155,11 @@ class ModelManager:
                         downloaded += len(chunk)
                         if total_size > 0:
                             progress = (downloaded / total_size) * 100
-                            print(f"    Progression: {progress:.1f}%", end='\r')
+                            if progress >= next_milestone:
+                                logger.info("Download progress: %.0f%%", progress)
+                                next_milestone += 25
 
-            print(f"\n✅ Téléchargé: {output_path}")
+            logger.info("Telecharge: %s", output_path)
             return output_path
 
         except Exception as e:
